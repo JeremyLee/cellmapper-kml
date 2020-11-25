@@ -85,17 +85,43 @@ function Get-BoundsFromPoints($points, [ref]$boundNE, [ref]$boundSW){
   $boundSW.Value = $tempSW
 }
 
+$global:lastRequest = [datetime]::MinValue
+
+$delayMS = 200
+$useragent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/87.0.4280.66 Safari/537.36'
+
+
+function Request($url, [switch]$reset) {
+  $timeSinceLastRequest = ([datetime]::Now - $global:lastRequest).TotalMilliseconds
+
+  if($timeSinceLastRequest -lt $delayMS){
+    Write-Host "Sleeping $($delayMS - $timeSinceLastRequest)ms"
+    Start-Sleep -Milliseconds($delayMS - $timeSinceLastRequest)
+  }
+
+  if ($global:session -and -not $reset) {
+    Invoke-WebRequest -uri $url -WebSession $global:session -UserAgent $useragent
+  } else {
+    Invoke-WebRequest -uri $url -SessionVariable 'tempsession' -UserAgent $useragent
+    $global:session = $tempsession
+    if($reset){
+      Write-Host 'Creating New Session'
+    }
+  }
+  $global:lastRequest = [datetime]::Now
+}
+
 function Get-Towers($mcc, $mnc, [System.Drawing.PointF]$boundNE, [System.Drawing.PointF]$boundSW ){
-  $results = Invoke-WebRequest "https://api.cellmapper.net/v6/getTowers?MCC=$mcc&MNC=$mnc&RAT=LTE&boundsNELatitude=$($boundNE.Y)&boundsNELongitude=$($boundNE.X)&boundsSWLatitude=$($boundSW.Y)&boundsSWLongitude=$($boundSW.X)&filterFrequency=false&showOnlyMine=false&showUnverifiedOnly=false&showENDCOnly=false"
+  $savedProgress = $ProgressPreference
+  $ProgressPreference = 'SilentlyContinue'
+  $results = Request "https://api.cellmapper.net/v6/getTowers?MCC=$mcc&MNC=$mnc&RAT=LTE&boundsNELatitude=$($boundNE.Y)&boundsNELongitude=$($boundNE.X)&boundsSWLatitude=$($boundSW.Y)&boundsSWLongitude=$($boundSW.X)&filterFrequency=false&showOnlyMine=false&showUnverifiedOnly=false&showENDCOnly=false"
 
-  if($results.Content -is [byte[]]){
-    Write-Host 'Too many requests to CellMapper. Please go to https://www.cellmapper.net/map and check the captcha when prompted.'
-    $z = Read-Host -Prompt "Press Enter to continue"
-    $results = Invoke-WebRequest "https://api.cellmapper.net/v6/getTowers?MCC=$mcc&MNC=$mnc&RAT=LTE&boundsNELatitude=$($boundNE.Y)&boundsNELongitude=$($boundNE.X)&boundsSWLatitude=$($boundSW.Y)&boundsSWLongitude=$($boundSW.X)&filterFrequency=false&showOnlyMine=false&showUnverifiedOnly=false&showENDCOnly=false"
-
+  if ($results.Content -is [byte[]]) {
+    $results = Request -reset "https://api.cellmapper.net/v6/getTowers?MCC=$mcc&MNC=$mnc&RAT=LTE&boundsNELatitude=$($boundNE.Y)&boundsNELongitude=$($boundNE.X)&boundsSWLatitude=$($boundSW.Y)&boundsSWLongitude=$($boundSW.X)&filterFrequency=false&showOnlyMine=false&showUnverifiedOnly=false&showENDCOnly=false"
   }
 
   $results = $results.Content | ConvertFrom-Json
+  $ProgressPreference = $savedProgress
   return $results.responseData
 }
 
@@ -126,13 +152,12 @@ function Get-Tower($mcc, $mnc, $siteID, $points){
   }
 
 
-  $results = Invoke-WebRequest "https://api.cellmapper.net/v6/getSite?MCC=$mcc&MNC=$mnc&Site=$siteID&RAT=LTE"
-  if($results.Content -is [byte[]]){
-    Write-Host 'Too many requests to CellMapper. Please go to https://www.cellmapper.net/map and check the captcha when prompted.'
-    $z = Read-Host -Prompt "Press Enter to continue"
-    $results = Invoke-WebRequest "https://api.cellmapper.net/v6/getSite?MCC=$mcc&MNC=$mnc&Site=$siteID&RAT=LTE"
+  $results = Request "https://api.cellmapper.net/v6/getSite?MCC=$mcc&MNC=$mnc&Site=$siteID&RAT=LTE"
+  if ($results.Content -is [byte[]]) {
+    $results = Request -reset "https://api.cellmapper.net/v6/getSite?MCC=$mcc&MNC=$mnc&Site=$siteID&RAT=LTE"
 
   }
+  
   $results = $results.Content | ConvertFrom-Json
   return $results.responseData
 }
