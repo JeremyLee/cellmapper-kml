@@ -22,7 +22,7 @@ function Get-Circlecoordinates($lat, $long, $meter) {
  
   $coordinatesList = @();
   # loop through the array and write path linestrings
-  for ($i = 0; $i -lt 360; $i += 3) {
+  for ($i = 0; $i -le 360; $i += 9) {
     $radial = deg2rad($i);
     $lat_rad = [math]::asin([math]::sin($lat1) * [math]::cos($d_rad) + [math]::cos($lat1) * [math]::sin($d_rad) * [math]::cos($radial));
     $dlon_rad = [math]::atan2([math]::sin($radial) * [math]::sin($d_rad) * [math]::cos($lat1), [math]::cos($d_rad) - [math]::sin($lat1) * [math]::sin($lat_rad));
