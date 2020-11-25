@@ -2,6 +2,7 @@
 . .\helpers.ps1
 
 ImportInstall-Module PSSqlite
+Add-Type -AssemblyName 'system.drawing'
 
 $rawData = Invoke-SqliteQuery -Database .\cellmapperdata.db -Query 'select * from data'
 
