@@ -10,6 +10,18 @@ param (
 ImportInstall-Module PSSqlite
 Add-Type -AssemblyName 'system.drawing'
 
+
+
+$timingAdvances = @{
+  "310-260" = @{
+    0  = 144
+    41 = { param($ta) ($ta - 20) * 144 }
+  }
+  "" = @{
+    0 = 144
+  }
+}
+
 $taRegex = [regex]'&LTE_TA=(?<TA>[0-9]+)&'
 $bandRegex = [regex]'&INFO_BAND_NUMBER=(?<Band>[0-9]+)&'
 if ($true) {
@@ -49,10 +61,34 @@ foreach ($point in $partiallyFiltered) {
       CID           = $point.CID
       Latitude      = $point.latitude
       Longitude     = $point.longitude
-      TimingAdvance = $matches.TA
+      TimingAdvance = [int]$matches.TA
     }
+
+    if (($current.TimingAdvance % 78) -eq 0) {
+      $current.TimingAdvance = $current.TimingAdvance / 78
+    }
+    elseif (($current.TimingAdvance % 144) -eq 0) {
+      $current.TimingAdvance = $current.TimingAdvance / 144
+    }
+    
     if ($point.extraData -match $bandRegex) {
-      $current['Band'] = $matches.Band
+      $current['Band'] = [int]$matches.Band
+    }
+
+    $carrierTA = $timingAdvances[$current.MCCMNC]
+    if(-not $carrierTA){
+      $carrierTA = $timingAdvances['']
+    }
+    if ($carrierTA) {
+      if (-not $carrierTA[$current.Band]) {
+        $current.TimingAdvance = $current.TimingAdvance * $carrierTA[0]
+      }
+      elseif ( $carrierTA[$current.Band] -is [scriptblock]) {
+        $current.TimingAdvance = $carrierTA[$current.Band].InvokeReturnAsIs($current.TimingAdvance)
+      }
+      else {
+        $current.TimingAdvance = $current.TimingAdvance * $carrierTA[$current.Band]
+      }
     }
 
     $data += [pscustomobject]$current
