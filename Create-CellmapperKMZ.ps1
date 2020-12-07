@@ -17,7 +17,11 @@ $timingAdvances = @{
     0  = 144
     41 = { param($ta) ($ta - 20) * 144 }
   }
-  "" = @{
+  "310-120" = @{
+    0  = 144
+    41 = { param($ta) ($ta - 20) * 144 }
+  }
+  ""        = @{
     0 = 144
   }
 }
@@ -26,11 +30,30 @@ $taRegex = [regex]'&LTE_TA=(?<TA>[0-9]+)&'
 $bandRegex = [regex]'&INFO_BAND_NUMBER=(?<Band>[0-9]+)&'
 if ($true) {
   Write-Host "Reading DB"
-  $rawData = Invoke-SqliteQuery -Database .\cellmapperdata.db -Query "select * from data
-  where extraData like '%LTE_TA=%'
-  group by Latitude,Longitude,Altitude,CID
-  having min(rowid)
-  order by date"
+
+  try {
+    
+    $rawData = Invoke-SqliteQuery -Database .\cellmapperdata.db -Query "select * from data
+    where extraData like '%LTE_TA=%'
+    group by Latitude,Longitude,Altitude,CID
+    having min(rowid)
+    order by date" -ErrorAction Stop
+  }
+  catch {
+    if ((get-command sqlite3).CommandType -ne 'Application') {
+      Write-Error "Error loading the database file. Install the sqlite executable on the path, and the script will attempt an autorepair."
+      exit
+    }
+    else {
+      sqlite3 cellmapperdata.db ".recover" | sqlite3 recovered.db
+
+      $rawData = Invoke-SqliteQuery -Database .\recovered.db -Query "select * from data
+      where extraData like '%LTE_TA=%'
+      group by Latitude,Longitude,Altitude,CID
+      having min(rowid)
+      order by date"
+    }
+  }
 
   Write-Host "Filtering data points"
   $data = @()
@@ -76,7 +99,7 @@ foreach ($point in $partiallyFiltered) {
     }
 
     $carrierTA = $timingAdvances[$current.MCCMNC]
-    if(-not $carrierTA){
+    if (-not $carrierTA) {
       $carrierTA = $timingAdvances['']
     }
     if ($carrierTA) {
