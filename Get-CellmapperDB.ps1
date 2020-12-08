@@ -30,3 +30,16 @@ tar -zxvf "$temptar" -C "$tempdir" apps/cellmapper.net.cellmapper/db/cellmapperd
 Move-Item (Join-Path $tempDir apps/cellmapper.net.cellmapper/db/cellmapperdata.db) $Path -Force
 
 Remove-Item $tempDir -Recurse -force
+
+if ((get-command sqlite3).CommandType -ne 'Application') {
+  Write-Warning "Install the sqlite executable on the path, and the script will attempt to repair any potential errors in the database."
+  exit
+}
+else {
+  $output = sqlite3 cellmapperdata.db "pragma integrity_check" 2>&1
+  if ($output | where-object { $_ -is [System.Management.Automation.ErrorRecord] }) {
+    sqlite3 cellmapperdata.db ".recover" | sqlite3 recovered.db
+    Move-Item Recovered.db cellmapperdata.db -Force
+  }
+
+}
