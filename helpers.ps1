@@ -49,10 +49,12 @@ function Get-eNBFolder($group, [switch]$noCircles, [switch]$noLines, [switch]$no
     $towerStatus = 'Calculated'
     $desc = $group.Name + " - Calculated"
   }
+  $taCount = @(($group.Group | Where-Object { $_.TimingAdvance -ne -1 })).Count
+  
   $parts = @(
     "
 		<Folder>
-			<name>$desc ($($group.Group.Count))</name>
+			<name>$desc ($taCount)</name>
 			<open>0</open>
     "
   )
@@ -157,7 +159,7 @@ function Get-eNBFolder($group, [switch]$noCircles, [switch]$noLines, [switch]$no
     $parts += "</Folder>"
   }
 
-  if (-not $noCircles) {
+  if ($circles.Count) {
     #### Circles
     $parts += "
   <Folder>
