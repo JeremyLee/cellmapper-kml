@@ -37,102 +37,101 @@ $taRegex = [regex]'&LTE_TA=(?<TA>[0-9]+)&'
 $bandRegex = [regex]'&INFO_BAND_NUMBER=(?<Band>[0-9]+)&'
 Write-Host "Reading DB"
 
-try {
+# Filter Types:
+#  - eNBs seens since date
+#  - eNBs
+# Both work the same. If the date is specified, it simply generates a list of eNBs and passes it to the second filter.
     
-  $rawData = Invoke-SqliteQuery -Database .\cellmapperdata.db -Query "select * from data
-    --where extraData like '%LTE_TA=%'
-    group by Latitude,Longitude,Altitude,CID
-    having min(rowid)
-    order by date" -ErrorAction Stop
-
-  $rawData += Invoke-SqliteQuery -Database .\cellmapperdata2.db -Query "select * from data
-    --where extraData like '%LTE_TA=%'
-    group by Latitude,Longitude,Altitude,CID
-    having min(rowid)
-    order by date" -ErrorAction Stop
+if ($null -ne $filterENBs -and $null -ne $enbsSeenSince) {
+  throw 'Can''t specify both $filterENBs and $enbsSeenSince.'
+  return
 }
-catch {
-  if ((get-command sqlite3).CommandType -ne 'Application') {
-    Write-Error "Error loading the database file. Install the sqlite executable on the path, and the script will attempt an autorepair."
-    exit
-  }
-  else {
-    & sqlite3 cellmapperdata.db ".recover" 2>$null | sqlite3 recovered.db 
 
-    $rawData = Invoke-SqliteQuery -Database .\recovered.db -Query "select * from data
-      where extraData like '%LTE_TA=%'
-      group by Latitude,Longitude,Altitude,CID
-      having min(rowid)
-      order by date"
+$dbNames = Get-ChildItem -Path $PSScriptRoot -Filter '*.db' | foreach-object { $_.FullName }
+
+if ($null -ne $enbsSeenSince) {
+  # Generate a list of eNBs from all the DBs
+  $filterENBs = @()
+  foreach ($db in $dbNames) {
+    $enbs = Invoke-SqliteQuery -Database $db -Query "select (CID >> 8) as eNB from data
+    where date > @Since and CID <> 0 and Latitude <> 0.0 and Longitude <> 0.0
+    group by (CID >> 8)" -SqlParameters @{Since = $enbsSeenSince } -ErrorAction Stop
+    $filterENBs += $enbs | ForEach-Object { $_.eNB }
+  }
+}
+
+$data = [System.Collections.ArrayList]::new()
+if ($null -ne $filterENBs) {
+  $filter = "(CID >> 8) in ($($filterENBs -join ','))"
+}
+else {
+  $filter = "CID <> 0 and Latitude <> 0.0 and Longitude <> 0.0"
+}
+$totalCount = 0
+foreach ($db in $dbNames) {
+  Write-Host "Reading $db"
+  $totalCount += (Invoke-SqliteQuery -Database $db -Query "select count() as count from data").count
+  $dbData = Invoke-SqliteQuery -Database $db -Query "select
+   (CID >> 8)          as eNB,
+   (MCC || '-' || MNC) as MCCMNC,
+   -1                  as TimingAdvance,
+   -1                  as Band,
+   Date,
+   CID,
+   Latitude,
+   Longitude,
+   Signal,
+   extraData from data
+    where $filter
+    group by Latitude,Longitude,Altitude,CID
+    having min(rowid)
+    order by date" -ErrorAction Stop
+  if($dbData){
+    $data.AddRange($dbData)
+}
   }
 
-  Write-Host "Filtering data points"
-  $data = @()
 
-  if ($null -ne $enbsSeenSince -and $null -eq $filterENBs) {
-    $filterENBs = $rawData | Where-Object { $_.date -gt $enbsSeenSince } | ForEach-Object { $_.CID -shr 8 } | Group-Object | ForEach-Object { $_.Name }
-  }
+Write-Host "Parsing $($data.Count) data points"
 
-  if ($filterENBs -is [int]) {
-    $partiallyFiltered = $rawData | where-object { $filterENBs -eq ($_.CID -shr 8) }
-  }
-  elseif ($filterENBs -is [array]) {
-    $partiallyFiltered = $rawData | where-object { $filterENBs -contains ($_.CID -shr 8) }
-  }
-  else {
-    $partiallyFiltered = $rawData
+foreach ($point in $data) {
+
+  if ($point.extraData -match $bandRegex) {
+    $point.Band = [int]$matches.Band
   }
   
-}
-foreach ($point in $partiallyFiltered) {
   if ($point.extraData -match $taRegex) {
-    # Only use data with a Timing Advance    
-    $current = @{
-      Date          = $point.Date
-      Signal        = $point.Signal
-      MCCMNC        = "$($point.MCC)-$($point.MNC)" 
-      eNB           = $point.CID -shr 8
-      CID           = $point.CID
-      Latitude      = $point.latitude
-      Longitude     = $point.longitude
-      TimingAdvance = [int]$matches.TA
-    }
+    $point.TimingAdvance = [int]$matches.TA
 
-    if (($current.TimingAdvance % 78) -eq 0) {
-      $current.TimingAdvance = $current.TimingAdvance / 78
+    if (($point.TimingAdvance % 78) -eq 0) {
+      $point.TimingAdvance = $point.TimingAdvance / 78
     }
-    elseif (($current.TimingAdvance % 144) -eq 0) {
-      $current.TimingAdvance = $current.TimingAdvance / 144
+    elseif (($point.TimingAdvance % 144) -eq 0) {
+      $point.TimingAdvance = $point.TimingAdvance / 144
     }
-    elseif (($current.TimingAdvance % 150) -eq 0) {
-      $current.TimingAdvance = $current.TimingAdvance / 150
+    elseif (($point.TimingAdvance % 150) -eq 0) {
+      $point.TimingAdvance = $point.TimingAdvance / 150
     }
     
-    if ($point.extraData -match $bandRegex) {
-      $current['Band'] = [int]$matches.Band
-    }
-
-    $carrierTA = $timingAdvances[$current.MCCMNC]
+    $carrierTA = $timingAdvances[$point.MCCMNC]
     if (-not $carrierTA) {
       $carrierTA = $timingAdvances['']
     }
     if ($carrierTA) {
-      if (-not $carrierTA[$current.Band]) {
-        $current.TimingAdvance = $current.TimingAdvance * $carrierTA[0]
+      if (-not $carrierTA[$point.Band]) {
+        $point.TimingAdvance = $point.TimingAdvance * $carrierTA[0]
       }
-      elseif ( $carrierTA[$current.Band] -is [scriptblock]) {
-        $current.TimingAdvance = $carrierTA[$current.Band].InvokeReturnAsIs($current.TimingAdvance)
+      elseif ( $carrierTA[$point.Band] -is [scriptblock]) {
+        $point.TimingAdvance = $carrierTA[$point.Band].InvokeReturnAsIs($point.TimingAdvance)
       }
       else {
-        $current.TimingAdvance = $current.TimingAdvance * $carrierTA[$current.Band]
+        $point.TimingAdvance = $point.TimingAdvance * $carrierTA[$point.Band]
       }
     }
-
-    $data += [pscustomobject]$current
   }
 }
 
-Write-Host "Using $($data.Count) points of $($rawData.Count)"
+Write-Host "Using $($data.Count) points of $totalCount"
 
 $providerGroups = $data | Group-Object -Property MCCMNC
 

@@ -107,19 +107,11 @@ function Get-eNBFolder($group, [switch]$noCircles, [switch]$noLines, [switch]$no
     (($signals[0] + $signals[$signals.count - 1] * 3) / 4))
   
   if (-not $noCircles) {
-    if ($group.Group.Count -gt 100) {
-      $pointsToUse = @()
-      $unusedPoints = [System.Collections.ArrayList]$group.Group
-      while ($pointsToUse.Count -lt 100) {
-        $p = $unusedPoints[(Get-Random -Maximum $unusedPoints.Count)]
-        $pointsToUse += $p
-        $unusedPoints.Remove($p)
+    $taPoints = [System.Collections.ArrayList](@($group.Group | Where-Object { $_.TimingAdvance -ne -1 }))
+    while ($pointsToUse.Count -gt 100) {
+      $unusedPoints.RemoveAt((Get-Random -Maximum $unusedPoints.Count))
       }
-    }
-    else {
-      $pointsToUse = $group.Group
-    }
-    foreach ($point in $pointsToUse) {
+    foreach ($point in $taPoints) {
       $circles += Get-CirclePlacemark $point
     }
   }
