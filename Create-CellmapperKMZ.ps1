@@ -35,37 +35,35 @@ $timingAdvances = @{
 
 $taRegex = [regex]'&LTE_TA=(?<TA>[0-9]+)&'
 $bandRegex = [regex]'&INFO_BAND_NUMBER=(?<Band>[0-9]+)&'
-if ($true) {
-  Write-Host "Reading DB"
+Write-Host "Reading DB"
 
-  try {
+try {
     
-    $rawData = Invoke-SqliteQuery -Database .\cellmapperdata.db -Query "select * from data
+  $rawData = Invoke-SqliteQuery -Database .\cellmapperdata.db -Query "select * from data
     --where extraData like '%LTE_TA=%'
     group by Latitude,Longitude,Altitude,CID
     having min(rowid)
     order by date" -ErrorAction Stop
 
-    $rawData += Invoke-SqliteQuery -Database .\cellmapperdata2.db -Query "select * from data
+  $rawData += Invoke-SqliteQuery -Database .\cellmapperdata2.db -Query "select * from data
     --where extraData like '%LTE_TA=%'
     group by Latitude,Longitude,Altitude,CID
     having min(rowid)
     order by date" -ErrorAction Stop
+}
+catch {
+  if ((get-command sqlite3).CommandType -ne 'Application') {
+    Write-Error "Error loading the database file. Install the sqlite executable on the path, and the script will attempt an autorepair."
+    exit
   }
-  catch {
-    if ((get-command sqlite3).CommandType -ne 'Application') {
-      Write-Error "Error loading the database file. Install the sqlite executable on the path, and the script will attempt an autorepair."
-      exit
-    }
-    else {
-      & sqlite3 cellmapperdata.db ".recover" 2>$null| sqlite3 recovered.db 
+  else {
+    & sqlite3 cellmapperdata.db ".recover" 2>$null | sqlite3 recovered.db 
 
-      $rawData = Invoke-SqliteQuery -Database .\recovered.db -Query "select * from data
+    $rawData = Invoke-SqliteQuery -Database .\recovered.db -Query "select * from data
       where extraData like '%LTE_TA=%'
       group by Latitude,Longitude,Altitude,CID
       having min(rowid)
       order by date"
-    }
   }
 
   Write-Host "Filtering data points"
