@@ -16,26 +16,26 @@ function deg2rad ($angle) {
 
 function Get-Circlecoordinates($lat, $long, $meter) {
   # convert coordinates to radians
-  $lat1 = deg2rad($lat);
-  $long1 = deg2rad($long);
+  $lat1 = $lat * ([Math]::PI / 180);
+  $long1 = $long * ([Math]::PI / 180);
   $d_rad = $meter / 6378137;
  
   $coordinatesList = @();
   # loop through the array and write path linestrings
   for ($i = 0; $i -le 360; $i += 9) {
-    $radial = deg2rad($i);
+    $radial = $i * ([Math]::PI / 180);
     $lat_rad = [math]::asin([math]::sin($lat1) * [math]::cos($d_rad) + [math]::cos($lat1) * [math]::sin($d_rad) * [math]::cos($radial));
     $dlon_rad = [math]::atan2([math]::sin($radial) * [math]::sin($d_rad) * [math]::cos($lat1), [math]::cos($d_rad) - [math]::sin($lat1) * [math]::sin($lat_rad));
     $lon_rad = (($long1 + $dlon_rad + [math]::PI) % (2 * [math]::PI)) - [math]::PI;
-    $coordinatesList += "$(rad2deg($lon_rad)),$(rad2deg($lat_rad)),0"
+    $coordinatesList += "$($lon_rad * (180 / [Math]::PI)),$($lat_rad * (180 / [Math]::PI)),0"
   }
   return [string]::join(' ', $coordinatesList)
 }
 
 $lastDigitRegex = [regex]'\d(?= - )'
 
-function Get-eNBFolder($group) {
-  $tower = Get-Tower -points $group.Group -mcc $group.Group[0].MCCMNC.Split('-')[0] -mnc $group.Group[0].MCCMNC.Split('-')[1] -siteID $group.Group[0].eNB
+function Get-eNBFolder($group, [switch]$noCircles, [switch]$noLines, [switch]$noPoints, [switch]$noTowers, [switch]$noToMove, [switch]$refreshCalculated) {
+  $tower = Get-Tower -points $group.Group -mcc $group.Group[0].MCCMNC.Split('-')[0] -mnc $group.Group[0].MCCMNC.Split('-')[1] -siteID $group.Group[0].eNB -refreshCalculated:$refreshCalculated
   $towerStatus = $null
   if (-not $tower) {
     $towerStatus = 'Missing'
@@ -56,10 +56,11 @@ function Get-eNBFolder($group) {
 			<open>0</open>
     "
   )
-  if ($tower) {
-    $parts += "
+  if (-not $noTowers) {
+    if ($tower) {
+      $parts += "
   <Placemark>
-    <name>CellMapper Location - $towerStatus</name>
+    <name>$($group.Name) - $towerStatus</name>
     <visibility>0</visibility>
     <styleUrl>#m_ylw-pushpin</styleUrl>
     <Point>
@@ -67,7 +68,8 @@ function Get-eNBFolder($group) {
       <coordinates>$($tower.longitude),$($tower.latitude),0</coordinates>
     </Point>
   </Placemark>"
-    $parts += "
+      if (-not $noToMove) {
+        $parts += "
   <Placemark>
     <name>Move This - $($group.Name)</name>
     <visibility>0</visibility>
@@ -77,13 +79,14 @@ function Get-eNBFolder($group) {
       <coordinates>$($tower.longitude),$($tower.latitude + 0.0005),0</coordinates>
     </Point>
   </Placemark>"
-  }
-  else {
-    $bounds = GetBoundsFromPoints $group.Group
-    $bounds = [System.Drawing.PointF]::new((($bounds[0].X + $bounds[1].X) / 2), (($bounds[0].Y + $bounds[1].Y) / 2))
-    $parts += "
+      }
+    }
+    else {
+      $bounds = GetBoundsFromPoints $group.Group
+      $bounds = [System.Drawing.PointF]::new((($bounds[0].X + $bounds[1].X) / 2), (($bounds[0].Y + $bounds[1].Y) / 2))
+      $parts += "
   <Placemark>
-    <name>Move This - $($group.Name)</name>
+    <name>$($group.Name) - Missing</name>
     <visibility>0</visibility>
     <styleUrl>#m_ylw-pushpin</styleUrl>
     <Point>
@@ -91,9 +94,11 @@ function Get-eNBFolder($group) {
       <coordinates>$($bounds.X),$($bounds.Y),0</coordinates>
     </Point>
   </Placemark>"
+    }
   }
 
   $circles = @()
+  $lineFolders = @{}
   $pointFolders = @{}
   $signals = $group.Group | ForEach-Object { $_.Signal } | Sort-Object -Descending
   $ratios = @(
@@ -101,40 +106,100 @@ function Get-eNBFolder($group) {
     (($signals[0] + $signals[$signals.count - 1]) / 2),
     (($signals[0] + $signals[$signals.count - 1] * 3) / 4))
   
+  if (-not $noCircles) {
+    if ($group.Group.Count -gt 100) {
+      $pointsToUse = @()
+      $unusedPoints = [System.Collections.ArrayList]$group.Group
+      while ($pointsToUse.Count -lt 100) {
+        $p = $unusedPoints[(Get-Random -Maximum $unusedPoints.Count)]
+        $pointsToUse += $p
+        $unusedPoints.Remove($p)
+      }
+    }
+    else {
+      $pointsToUse = $group.Group
+    }
+    foreach ($point in $pointsToUse) {
+      $circles += Get-CirclePlacemark $point
+    }
+  }
+  
   foreach ($point in $group.Group) {
     $folderName = Get-PointFolderName $point
-    if (-not $pointFolders[$folderName]) {
-      $pointFolders[$folderName] = @()
+
+    if (-not $noPoints) {
+      if (-not $pointFolders[$folderName]) {
+        $pointFolders[$folderName] = @()
+      }
+      # Create points
+      $pointFolders[$folderName] += Get-PointPlacemark -point $point -signalRatios $ratios
     }
-    $pointFolders[$folderName] += Get-PointPlacemark -point $point -signalRatios $ratios
-    $circles += Get-CirclePlacemark $point
+
+    if (-not $noLines -and $tower) {
+      # Create lines
+      if (-not $lineFolders[$folderName]) {
+        $lineFolders[$folderName] = @()
+      }
+      $lineFolders[$folderName] += Get-Line -point $point -targetPoint $tower
+    }
   }
 
-  $parts += "
+  
+  if (-not $noPoints) {
+    #### Points
+    $parts += "
   <Folder>
     <name>Points</name>
     <open>0</open>  
   "
-  $sortedPointFolders = $pointFolders.Keys | Sort-object { $_[$_.IndexOf(' ') - 1] }, { $_ }
-  foreach ($pf in $sortedPointFolders) {
-    $parts += "
+    $sortedPointFolders = $pointFolders.Keys | Sort-object { $_[$_.IndexOf(' ') - 1] }, { $_ }
+    foreach ($pf in $sortedPointFolders) {
+      $parts += "
     <Folder>
       <name>$pf</name>
       <open>0</open>  
     "
-    $parts += $pointFolders[$pf]
+      $parts += $pointFolders[$pf]
+      $parts += "</Folder>"
+    }
     $parts += "</Folder>"
   }
-  $parts += "</Folder>"
 
-  
-  $parts += "
+  if (-not $noCircles) {
+    #### Circles
+    $parts += "
   <Folder>
     <name>Circles</name>
     <open>0</open>  
   "
-  $parts += $circles
-  $parts += "</Folder>"
+    $parts += $circles
+    $parts += "</Folder>"
+    #### End Circles
+  }
+
+  if (-not $noLines) {
+    #### Lines to Tower
+    if ($tower) {
+      $parts += "
+  <Folder>
+    <name>Lines</name>
+    <open>0</open>  
+  "
+      $sortedLineFolders = $lineFolders.Keys | Sort-object { $_[$_.IndexOf(' ') - 1] }, { $_ }
+
+      foreach ($pf in $sortedLineFolders) {
+        $parts += "
+    <Folder>
+      <name>$pf</name>
+      <open>0</open>  
+    "
+        $parts += $lineFolders[$pf]
+        $parts += "</Folder>"
+      }
+      $parts += "</Folder>"
+    }
+  }
+
   
   $parts += "</Folder>"
   
@@ -143,6 +208,8 @@ function Get-eNBFolder($group) {
     Status = $towerStatus
   }
 }
+
+
 
 function Get-PointPlacemark($point, $signalRatios = @(-84, -102, -111)) {
   $style = "#m_grn-dot"
@@ -249,13 +316,39 @@ function Get-Towers($mcc, $mnc, [System.Drawing.PointF]$boundNE, [System.Drawing
   return $results.responseData
 }
 
-$towerCache = @{}
+$global:towerCache = $null
 $GLOBAL:requestsSaved = 0
 
-function Get-Tower($mcc, $mnc, $siteID, $points) {
-  if ($towerCache[$siteID.ToString()]) {
-    $GLOBAL:requestsSaved += 1
-    return $towerCache[$siteID.ToString()]
+
+function Get-Tower($mcc, $mnc, $siteID, $points, [switch]$refreshCalculated) {
+  if ($null -eq $global:towerCache) {
+    if (Test-Path 'towercache.json') {
+      $temp = Get-Content 'towercache.json' -Raw | ConvertFrom-Json
+      if ($temp -is [pscustomobject]) {
+        $newTemp = @{}
+        $temp.PSObject.Properties | ForEach-Object {
+          $newTemp[$_.Name] = $_.Value
+        }
+        $global:towerCache = $newTemp
+      }
+
+      $keys = @($global:towerCache.Keys)
+      $keys | foreach-Object {
+        if (-not($global:towerCache[$_].RetrievalDate -gt [datetime]::Now.AddDays(-2))) {
+          $global:towerCache.Remove($_)
+        }
+      }
+    }
+    if ($global:towerCache -isnot [hashtable]) {
+      $global:towerCache = @{}
+    }
+  }
+
+  if ($global:towerCache[$siteID.ToString()] -and ($global:towerCache[$siteID.ToString()].RetrievalDate -gt [datetime]::Now.AddDays(-2))) {
+    if ($global:towerCache[$siteID.ToString()].towerMover -or -not $refreshCalculated) {
+      $GLOBAL:requestsSaved += 1
+      return $global:towerCache[$siteID.ToString()]
+    }
   }
 
   [System.Drawing.PointF]$boundsSW = [System.Drawing.PointF]::Empty
@@ -270,11 +363,14 @@ function Get-Tower($mcc, $mnc, $siteID, $points) {
   $towers = Get-Towers -mcc $mcc -mnc $mnc -boundNE $boundsNE -boundSW $boundsSW
 
   foreach ($tower in $towers) {
-    $towerCache[$tower.siteID.ToString()] = $tower
+    $tower | Add-Member -NotePropertyName "RetrievalDate" -NotePropertyValue ([datetime]::Now)
+    $global:towerCache[$tower.siteID.ToString()] = $tower
   }
 
-  if ($towerCache[$siteID.ToString()]) {
-    return $towerCache[$siteID.ToString()]
+  if ($global:towerCache[$siteID.ToString()] -and ($global:towerCache[$siteID.ToString()].RetrievalDate -gt [datetime]::Now.AddDays(-2))) {
+    if ($global:towerCache[$siteID.ToString()].towerMover -or -not $refreshCalculated) {
+      return $global:towerCache[$siteID.ToString()]
+    }
   }
 
 
@@ -285,7 +381,18 @@ function Get-Tower($mcc, $mnc, $siteID, $points) {
   }
   
   $results = $results.Content | ConvertFrom-Json
-  return $results.responseData
+
+  if ($results.responseData.siteID) {
+    $tower = $results.responseData
+    
+    $tower | Add-Member -NotePropertyName "RetrievalDate" -NotePropertyValue ([datetime]::Now)
+    $global:towerCache[$tower.siteID.ToString()] = $tower
+    return $tower
+  }
+}
+
+function Save-TowerCache {
+  $towerCache | ConvertTo-Json | Out-File 'towercache.json'
 }
 
 function Get-CirclePlacemark($point) {
@@ -305,6 +412,117 @@ function Get-CirclePlacemark($point) {
       </coordinates>
     </LineString>
   </Placemark>"
+}
+
+$sectorIDs = @(
+  1, 2, 3, 4,
+  11, 12, 13, 14,
+  21, 22, 23, 24,
+  61, 62, 63, 64,
+  131, 132, 133,
+  141, 142, 143
+)
+
+function Get-LineStyles() {
+  $list = [System.Collections.ArrayList]::new()
+  
+  for ($i = 0; $i -lt $sectorIDs.Count; $i++) {
+    $id = $sectorIDs[$i]
+    $color = ConvertFrom-Hsl -Hue ($i / $sectorIDs.Count * 360) -Lightness 50 -Saturation 100
+    $n = $list.Add("
+    <Style id=""sector$id"">
+      <LineStyle>
+        <color>ff$($color.B.ToString('X2'))$($color.G.ToString('X2'))$($color.R.ToString('X2'))</color>
+        <width>1.5</width>
+      </LineStyle>
+    </Style>")
+  }
+
+  $n = $list.Add("
+  <Style id=""sectorOther"">
+    <LineStyle>
+      <color>ff000000</color>
+      <width>1.5</width>
+    </LineStyle>
+  </Style>")
+
+  return $list.ToArray()
+}
+
+function Get-Line($point, $targetPoint) {
+  $sectorNumber = $point.CID -band 0xFF
+  $styleName = $sectorIDs.IndexOf([int]$sectorNumber)
+  if ($styleName -eq -1) {
+    $styleName = "sectorOther"
+  }
+  else {
+    $styleName = "sector$sectorNumber"
+  }
+  "
+  <Placemark>
+    <name>$($point.Date.ToString('yyyy-MM-dd HH.mm.ss'))</name>
+    <visibility>0</visibility>
+    <styleUrl>#$styleName</styleUrl>
+    <LineString>
+      <tessellate>1</tessellate>
+      <coordinates>
+        $($point.Longitude),$($point.Latitude),0 $($targetPoint.Longitude),$($targetPoint.Latitude),0 
+      </coordinates>
+    </LineString>
+  </Placemark>"
+}
+
+# https://gist.github.com/ConnorGriffin/ac21c25ecd7ef5e918cbd28e5cb6ed0d
+function ConvertFrom-Hsl {
+  param(
+    $Hue,
+    $Saturation,
+    $Lightness
+  )
+  $Hue = [double]($Hue / 360)
+  if ($Saturation -gt 1) {
+    $Saturation = [double]($Saturation / 100)
+  }
+  if ($Lightness -gt 1) {
+    $Lightness = [double]($Lightness / 100)
+  }
+  
+  if ($Saturation -eq 0) {
+    # No color
+    $red = $green = $blue = $Lightness
+  }
+  else {
+    function HueToRgb ($p, $q, $t) {
+      if ($t -lt 0) {
+        $t++
+      }
+      if ($t -gt 1) {
+        $t--
+      } 
+      if ($t -lt 1 / 6) {
+        return $p + ($q - $p) * 6 * $t
+      } 
+      if ($t -lt 1 / 2) {
+        return $q
+      }
+      if ($t -lt 2 / 3) {
+        return $p + ($q - $p) * (2 / 3 - $t) * 6
+      }
+      return $p
+    }
+    $q = if ($Lightness -lt .5) {
+      $Lightness * (1 + $Saturation)
+    }
+    else {
+      $Lightness + $Saturation - $Lightness * $Saturation
+    }
+    $p = 2 * $Lightness - $q
+    $red = HueToRgb $p $q ($Hue + 1 / 3)
+    $green = HueToRgb $p $q $Hue
+    $blue = HueToRgb $p $q ($Hue - 1 / 3)
+  }
+
+  return [System.Drawing.Color]::FromArgb($red * 255, $green * 255, $blue * 255)
 }
 
 $kmlHeader = '<?xml version="1.0" encoding="UTF-8"?>
@@ -466,4 +684,3 @@ $kmlFooter = '
   </Document>
   </kml>
   '
-

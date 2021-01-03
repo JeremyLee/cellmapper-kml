@@ -1,7 +1,14 @@
 [CmdletBinding()]
 param (
   $filterENBs = $null,
-  [Nullable[datetime]]$enbsSeenSince = $null
+  $filename = $null,
+  [Nullable[datetime]]$enbsSeenSince = $null,
+  [switch]$noCircles,
+  [switch]$noLines,
+  [switch]$noPoints,
+  [switch]$noTowers,
+  [switch]$noToMove,
+  [switch]$refreshCalculated
 )
 
 #.\Get-CellmapperDB.ps1
@@ -14,15 +21,15 @@ Add-Type -AssemblyName 'system.drawing'
 
 $timingAdvances = @{
   "310-260" = @{
-    0  = 144
-    41 = { param($ta) ($ta - 20) * 144 }
+    0  = 150
+    41 = { param($ta) ($ta - 20) * 150 }
   }
   "310-120" = @{
-    0  = 144
-    41 = { param($ta) ($ta - 20) * 144 }
+    0  = 150
+    41 = { param($ta) ($ta - 20) * 150 }
   }
   ""        = @{
-    0 = 144
+    0 = 150
   }
 }
 
@@ -34,7 +41,13 @@ if ($true) {
   try {
     
     $rawData = Invoke-SqliteQuery -Database .\cellmapperdata.db -Query "select * from data
-    where extraData like '%LTE_TA=%'
+    --where extraData like '%LTE_TA=%'
+    group by Latitude,Longitude,Altitude,CID
+    having min(rowid)
+    order by date" -ErrorAction Stop
+
+    $rawData += Invoke-SqliteQuery -Database .\cellmapperdata2.db -Query "select * from data
+    --where extraData like '%LTE_TA=%'
     group by Latitude,Longitude,Altitude,CID
     having min(rowid)
     order by date" -ErrorAction Stop
@@ -45,7 +58,7 @@ if ($true) {
       exit
     }
     else {
-      sqlite3 cellmapperdata.db ".recover" | sqlite3 recovered.db
+      & sqlite3 cellmapperdata.db ".recover" 2>$null| sqlite3 recovered.db 
 
       $rawData = Invoke-SqliteQuery -Database .\recovered.db -Query "select * from data
       where extraData like '%LTE_TA=%'
@@ -59,7 +72,7 @@ if ($true) {
   $data = @()
 
   if ($null -ne $enbsSeenSince -and $null -eq $filterENBs) {
-    $filterENBs = $rawData | Where-Object { $_.Date -gt $enbsSeenSince.Value } | ForEach-Object { $_.CID -shr 8 } | Group-Object | ForEach-Object { $_.Name }
+    $filterENBs = $rawData | Where-Object { $_.date -gt $enbsSeenSince } | ForEach-Object { $_.CID -shr 8 } | Group-Object | ForEach-Object { $_.Name }
   }
 
   if ($filterENBs -is [int]) {
@@ -92,6 +105,9 @@ foreach ($point in $partiallyFiltered) {
     }
     elseif (($current.TimingAdvance % 144) -eq 0) {
       $current.TimingAdvance = $current.TimingAdvance / 144
+    }
+    elseif (($current.TimingAdvance % 150) -eq 0) {
+      $current.TimingAdvance = $current.TimingAdvance / 150
     }
     
     if ($point.extraData -match $bandRegex) {
@@ -128,8 +144,11 @@ foreach ($provider in $providerGroups) {
   $resultLocated = @($kmlHeader.Replace('My Places.kml', "$($provider.Name) - Located"))
   $resultCalculated = @($kmlHeader.Replace('My Places.kml', "$($provider.Name) - Calculated"))
   $resultMissing = @()
+  $resultLocated += Get-LineStyles
+  $resultCalculated += Get-LineStyles
+
   foreach ($enb in $eNBs) {
-    $enbFolder = Get-eNBFolder -group $enb -towers $towers
+    $enbFolder = Get-eNBFolder -group $enb -towers $towers -noCircles:$noCircles -noLines:$noLines -noPoints:$noPoints -noTowers:$noTowers -noToMove:$noToMove -refreshCalculated:$refreshCalculated
     if ($enbFolder.Status -eq 'Located') {
       $resultLocated += $enbFolder.XML
     }
@@ -148,11 +167,13 @@ foreach ($provider in $providerGroups) {
   $resultLocated = [string]::Join("`r`n", $resultLocated)
   $resultCalculated = [string]::Join("`r`n", $resultCalculated)
 
-  $resultLocated | Out-File "$($provider.Name) - Located.kml"
-  Write-Host "Created $($provider.Name) - Located.kml"
-  $resultCalculated | Out-File "$($provider.Name) - Calculated.kml"
-  Write-Host "Created $($provider.Name) - Calculated.kml"
+  $resultLocated | Out-File "$($provider.Name) - Located$filename.kml"
+  Write-Host "Created $($provider.Name) - Located$filename.kml"
+  $resultCalculated | Out-File "$($provider.Name) - Calculated$filename.kml"
+  Write-Host "Created $($provider.Name) - Calculated$filename.kml"
 
 }
+
+Save-TowerCache
 
 Write-Host "Saved $GLOBAL:requestsSaved requests by getting a list of towers instead of requesting each tower."
