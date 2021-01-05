@@ -2,7 +2,8 @@
 param (
   $filterENBs = $null,
   $filename = $null,
-  [Nullable[datetime]]$enbsSeenSince = $null,
+  [Nullable[datetime]]$enbsSeenStart = $null,
+  [Nullable[datetime]]$enbsSeenEnd = $null,
   [switch]$noCircles,
   [switch]$noLines,
   [switch]$noPoints,
@@ -42,20 +43,29 @@ Write-Host "Reading DB"
 #  - eNBs
 # Both work the same. If the date is specified, it simply generates a list of eNBs and passes it to the second filter.
     
-if ($null -ne $filterENBs -and $null -ne $enbsSeenSince) {
-  throw 'Can''t specify both $filterENBs and $enbsSeenSince.'
+if ($null -ne $filterENBs -and ($null -ne $enbsSeenStart -or $null -ne $enbsSeenEnd)) {
+  throw 'Can''t specify both $filterENBs and $enbsSeenStart/$enbsSeenEnd.'
   return
 }
 
 $dbNames = Get-ChildItem -Path $PSScriptRoot -Filter '*.db' | foreach-object { $_.FullName }
 
-if ($null -ne $enbsSeenSince) {
+$dateFilter = ""
+
+if ($null -ne $enbsSeenStart) {
+  $dateFilter += "date > @Start and "
+}
+if ($null -ne $enbsSeenEnd) {
+  $dateFilter += "date < @End and "
+}
+if ($dateFilter.Length -ne 0) {
+  
   # Generate a list of eNBs from all the DBs
   $filterENBs = @()
   foreach ($db in $dbNames) {
     $enbs = Invoke-SqliteQuery -Database $db -Query "select (CID >> 8) as eNB from data
-    where date > @Since and CID <> 0 and Latitude <> 0.0 and Longitude <> 0.0
-    group by (CID >> 8)" -SqlParameters @{Since = $enbsSeenSince } -ErrorAction Stop
+    where $datefilter CID <> 0 and Latitude <> 0.0 and Longitude <> 0.0
+    group by (CID >> 8)" -SqlParameters @{Start = $enbsSeenStart; End = $enbsSeenEnd } -ErrorAction Stop
     $filterENBs += $enbs | ForEach-Object { $_.eNB }
   }
 }
@@ -89,9 +99,9 @@ foreach ($db in $dbNames) {
   if ($dbData -isnot [array]) {
     $dbData = @($dbData)
   }
-    $data.AddRange($dbData)
+  $data.AddRange($dbData)
   
-  }
+}
 
 
 Write-Host "Parsing $($data.Count) data points"
