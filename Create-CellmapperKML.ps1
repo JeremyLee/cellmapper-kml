@@ -86,9 +86,11 @@ foreach ($db in $dbNames) {
     group by Latitude,Longitude,Altitude,CID
     having min(rowid)
     order by date" -ErrorAction Stop
-  if($dbData){
+  if ($dbData -isnot [array]) {
+    $dbData = @($dbData)
+  }
     $data.AddRange($dbData)
-}
+  
   }
 
 
