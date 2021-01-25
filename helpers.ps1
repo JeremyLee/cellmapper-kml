@@ -34,8 +34,8 @@ function Get-Circlecoordinates($lat, $long, $meter) {
 
 $lastDigitRegex = [regex]'\d(?= - )'
 
-function Get-eNBFolder($group, [switch]$noCircles, [switch]$noLines, [switch]$noPoints, [switch]$noTowers, [switch]$noToMove, [switch]$refreshCalculated) {
-  $tower = Get-Tower -points $group.Group -mcc $group.Group[0].MCCMNC.Split('-')[0] -mnc $group.Group[0].MCCMNC.Split('-')[1] -siteID $group.Group[0].eNB -refreshCalculated:$refreshCalculated
+function Get-eNBFolder($group, [switch]$noCircles, [switch]$noLines, [switch]$noPoints, [switch]$noTowers, [switch]$noToMove, [switch]$refreshCalculated, [nullable[datetime]]$refreshOlderThan, [nullable[datetime]]$refreshCalculatedOlderThan) {
+  $tower = Get-Tower -points $group.Group -mcc $group.Group[0].MCCMNC.Split('-')[0] -mnc $group.Group[0].MCCMNC.Split('-')[1] -siteID $group.Group[0].eNB -refreshCalculated:$refreshCalculated -refreshOlderThan $refreshOlderThan -refreshCalculatedOlderThan $refreshCalculatedOlderThan
   $towerStatus = $null
   if (-not $tower) {
     $towerStatus = 'Missing'
@@ -112,7 +112,7 @@ function Get-eNBFolder($group, [switch]$noCircles, [switch]$noLines, [switch]$no
     $taPoints = [System.Collections.ArrayList](@($group.Group | Where-Object { $_.TimingAdvance -ne -1 }))
     while ($pointsToUse.Count -gt 100) {
       $unusedPoints.RemoveAt((Get-Random -Maximum $unusedPoints.Count))
-      }
+    }
     foreach ($point in $taPoints) {
       $circles += Get-CirclePlacemark $point
     }
@@ -383,6 +383,18 @@ function Get-Tower($mcc, $mnc, $siteID, $points, [switch]$refreshCalculated) {
     $global:towerCache[$tower.siteID.ToString()] = $tower
     return $tower
   }
+}
+
+function Is-InSmallCellRange($eNBID, $ranges) {
+  foreach ($range in $ranges) {
+    if ($range.Count -eq 1 -and $range[0] -eq $eNBID) {
+      return $true
+    }
+    elseif ($range.Count -eq 2 -and $range[0] -le $eNBID -and $range[1] -ge $eNBID) {
+      return $true
+    }
+  }
+  return $false
 }
 
 function Save-TowerCache {

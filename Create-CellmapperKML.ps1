@@ -9,7 +9,10 @@ param (
   [switch]$noPoints,
   [switch]$noTowers,
   [switch]$noToMove,
-  [switch]$refreshCalculated
+  [switch]$refreshCalculated,
+  [nullable[datetime]]$refreshOlderThan = $null,
+  [nullable[datetime]]$refreshCalculatedOlderThan = $null,
+  [array]$filterMCCMNC = $null
 )
 
 #.\Get-CellmapperDB.ps1
@@ -32,6 +35,24 @@ $timingAdvances = @{
   ""        = @{
     0 = 150
   }
+}
+
+$smallCellRanges = @{
+  "310-260" = @(
+    @(57184, 57186),
+    @(57259, 57375),
+    @(57446, 57447),
+    @(59588),
+    @(125129, 125166),
+    @(125168, 125191),
+    @(125610),
+    @(126100),
+    @(127890),
+    @(146303),
+    @(146715),
+    @(147400),
+    @(149143)
+  )
 }
 
 $taRegex = [regex]'&LTE_TA=(?<TA>[0-9]+)&'
@@ -146,43 +167,59 @@ foreach ($point in $data) {
 Write-Host "Using $($data.Count) points of $totalCount"
 
 $providerGroups = $data | Group-Object -Property MCCMNC
-
-foreach ($provider in $providerGroups) {
-  $eNBs = $provider.Group | Group-Object -Property eNB | Sort-Object { [int]$_.Name }
-
-  $resultLocated = @($kmlHeader.Replace('My Places.kml', "$($provider.Name) - Located"))
-  $resultCalculated = @($kmlHeader.Replace('My Places.kml', "$($provider.Name) - Calculated"))
-  $resultMissing = @()
-  $resultLocated += Get-LineStyles
-  $resultCalculated += Get-LineStyles
-
-  foreach ($enb in $eNBs) {
-    $enbFolder = Get-eNBFolder -group $enb -towers $towers -noCircles:$noCircles -noLines:$noLines -noPoints:$noPoints -noTowers:$noTowers -noToMove:$noToMove -refreshCalculated:$refreshCalculated
-    if ($enbFolder.Status -eq 'Located') {
-      $resultLocated += $enbFolder.XML
-    }
-    elseif ($enbFolder.Status -eq 'Calculated') {
-      $resultCalculated += $enbFolder.XML
-    }
-    else {
-      $resultMissing += $enbFolder.XML
-    }
+try {
+  if ($filterMCCMNC -is [array]) {
+    $providerGroups = $providerGroups | Where-Object { $filterMCCMNC.Contains($_.Name) }
   }
-  $resultCalculated += $resultMissing # The ones missing from CellMapper should go at the bottom.
 
-  $resultLocated += $kmlFooter
-  $resultCalculated += $kmlFooter
+  foreach ($provider in $providerGroups) {
+    $eNBs = $provider.Group | Group-Object -Property eNB | Sort-Object { [int]$_.Name }
 
-  $resultLocated = [string]::Join("`r`n", $resultLocated)
-  $resultCalculated = [string]::Join("`r`n", $resultCalculated)
+    $providerSmallCellRanges = $smallCellRanges[$provider.Name]
 
-  $resultLocated | Out-File "$($provider.Name) - Located$filename.kml"
-  Write-Host "Created $($provider.Name) - Located$filename.kml"
-  $resultCalculated | Out-File "$($provider.Name) - Calculated$filename.kml"
-  Write-Host "Created $($provider.Name) - Calculated$filename.kml"
+    $resultLocated = @($kmlHeader.Replace('My Places.kml', "$($provider.Name) - Located"))
+    $resultCalculated = @($kmlHeader.Replace('My Places.kml', "$($provider.Name) - Calculated"))
+    $resultSmallCells = @($kmlHeader.Replace('My Places.kml', "$($provider.Name) - SmallCells"))
+    $resultMissing = @()
+    $resultLocated += Get-LineStyles
+    $resultCalculated += Get-LineStyles
+    $resultSmallCells += Get-LineStyles
 
+    foreach ($enb in $eNBs) {
+      $enbFolder = Get-eNBFolder -group $enb -towers $towers -noCircles:$noCircles -noLines:$noLines -noPoints:$noPoints -noTowers:$noTowers -noToMove:$noToMove -refreshCalculated:$refreshCalculated -refreshOlderThan $refreshOlderThan -refreshCalculatedOlderThan $refreshCalculatedOlderThan
+      if ($providerSmallCellRanges -and (Is-InSmallCellRange -enbID $enb.Values[0] -ranges $providerSmallCellRanges)) {
+        $resultSmallCells += $enbFolder.XML
+      }
+      elseif ($enbFolder.Status -eq 'Located') {
+        $resultLocated += $enbFolder.XML
+      }
+      elseif ($enbFolder.Status -eq 'Calculated') {
+        $resultCalculated += $enbFolder.XML
+      }
+      else {
+        $resultMissing += $enbFolder.XML
+      }
+    }
+    $resultCalculated += $resultMissing # The ones missing from CellMapper should go at the bottom.
+
+    $resultLocated += $kmlFooter
+    $resultCalculated += $kmlFooter
+    $resultSmallCells += $kmlFooter
+
+    $resultLocated = [string]::Join("`r`n", $resultLocated)
+    $resultCalculated = [string]::Join("`r`n", $resultCalculated)
+    $resultSmallCells = [string]::Join("`r`n", $resultSmallCells)
+
+    $resultLocated | Out-File "$($provider.Name) - Located$filename.kml"
+    Write-Host "Created $($provider.Name) - Located$filename.kml"
+    $resultCalculated | Out-File "$($provider.Name) - Calculated$filename.kml"
+    Write-Host "Created $($provider.Name) - Calculated$filename.kml"
+    $resultSmallCells | Out-File "$($provider.Name) - SmallCells$filename.kml"
+    Write-Host "Created $($provider.Name) - SmallCells$filename.kml"
+
+  }
 }
-
-Save-TowerCache
-
+finally {
+  Save-TowerCache
+}
 Write-Host "Saved $GLOBAL:requestsSaved requests by getting a list of towers instead of requesting each tower."
