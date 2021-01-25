@@ -275,35 +275,52 @@ $delayMS = 50
 $useragent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/87.0.4280.66 Safari/537.36'
 
 
-function Request($url, [switch]$reset) {
+function Request($url) {
   $timeSinceLastRequest = ([datetime]::Now - $global:lastRequest).TotalMilliseconds
-
+  $reset = $false
   if ($timeSinceLastRequest -lt $delayMS) {
-    Write-Host "Sleeping $($delayMS - $timeSinceLastRequest)ms"
+    #Write-Host "Sleeping $($delayMS - $timeSinceLastRequest)ms"
     Start-Sleep -Milliseconds($delayMS - $timeSinceLastRequest)
   }
-
-  if ($global:session -and -not $reset) {
-    Invoke-WebRequest -uri $url -WebSession $global:session -UserAgent $useragent
-  }
-  else {
-    Invoke-WebRequest -uri $url -SessionVariable 'tempsession' -UserAgent $useragent
-    $global:session = $tempsession
+  while ($true) {
     if ($reset) {
-      Write-Host 'Creating New Session'
+      $tempProgress = $ProgressPreference
+      $ProgressPreference = 'SilentlyContinue'
+      $result = Invoke-WebRequest -uri $url -SessionVariable 'tempsession' -UserAgent $useragent
+      $ProgressPreference = $tempProgress
+      $global:session = $tempsession
+      if ($reset) {
+        Write-Host 'New Session'
+      }
     }
+    else {
+      $tempProgress = $ProgressPreference
+      $ProgressPreference = 'SilentlyContinue'
+      if($null -eq $url){
+        [System.Diagnostics.Debugger]::Break()
+      }
+      $result = Invoke-WebRequest -uri $url -WebSession $global:session -UserAgent $useragent
+      $ProgressPreference = $tempProgress
+    }
+    if ($result.Content -isnot [byte[]]) {
+      return $result
+    }
+    elseif($reset -eq $true) {
+      Write-Warning "Creating new session didn't resolve captcha issue."
+      & explorer 'https://cellmapper.net'
+      Read-Host -Prompt 'Check the captcha on Cellmapper'
+      $reset = $true
+    } else {
+      $reset = $true
+    }
+    $global:lastRequest = [datetime]::Now
   }
-  $global:lastRequest = [datetime]::Now
 }
 
 function Get-Towers($mcc, $mnc, [System.Drawing.PointF]$boundNE, [System.Drawing.PointF]$boundSW ) {
   $savedProgress = $ProgressPreference
   $ProgressPreference = 'SilentlyContinue'
   $results = Request "https://api.cellmapper.net/v6/getTowers?MCC=$mcc&MNC=$mnc&RAT=LTE&boundsNELatitude=$($boundNE.Y)&boundsNELongitude=$($boundNE.X)&boundsSWLatitude=$($boundSW.Y)&boundsSWLongitude=$($boundSW.X)&filterFrequency=false&showOnlyMine=false&showUnverifiedOnly=false&showENDCOnly=false"
-
-  if ($results.Content -is [byte[]]) {
-    $results = Request -reset "https://api.cellmapper.net/v6/getTowers?MCC=$mcc&MNC=$mnc&RAT=LTE&boundsNELatitude=$($boundNE.Y)&boundsNELongitude=$($boundNE.X)&boundsSWLatitude=$($boundSW.Y)&boundsSWLongitude=$($boundSW.X)&filterFrequency=false&showOnlyMine=false&showUnverifiedOnly=false&showENDCOnly=false"
-  }
 
   $results = $results.Content | ConvertFrom-Json
   $ProgressPreference = $savedProgress
@@ -314,7 +331,7 @@ $global:towerCache = $null
 $GLOBAL:requestsSaved = 0
 
 
-function Get-Tower($mcc, $mnc, $siteID, $points, [switch]$refreshCalculated) {
+function Get-Tower($mcc, $mnc, $siteID, $points, [switch]$refreshCalculated, [nullable[datetime]]$refreshOlderThan, [nullable[datetime]]$refreshCalculatedOlderThan) {
   if ($null -eq $global:towerCache) {
     if (Test-Path 'towercache.json') {
       $temp = Get-Content 'towercache.json' -Raw | ConvertFrom-Json
@@ -326,9 +343,12 @@ function Get-Tower($mcc, $mnc, $siteID, $points, [switch]$refreshCalculated) {
         $global:towerCache = $newTemp
       }
 
+      if ($null -eq $refreshOlderThan) {
+        $refreshOlderThan = [datetime]::Now.AddDays(-2)
+      }
       $keys = @($global:towerCache.Keys)
       $keys | foreach-Object {
-        if (-not($global:towerCache[$_].RetrievalDate -gt [datetime]::Now.AddDays(-2))) {
+        if (-not($global:towerCache[$_].RetrievalDate -gt $refreshOlderThan)) {
           $global:towerCache.Remove($_)
         }
       }
@@ -337,8 +357,11 @@ function Get-Tower($mcc, $mnc, $siteID, $points, [switch]$refreshCalculated) {
       $global:towerCache = @{}
     }
   }
+  if ($null -eq $refreshCalculatedOlderThan) {
+    $refreshCalculatedOlderThan = [datetime]::Now.AddDays(-2)
+  }
 
-  if ($global:towerCache[$siteID.ToString()] -and ($global:towerCache[$siteID.ToString()].RetrievalDate -gt [datetime]::Now.AddDays(-2))) {
+  if ($global:towerCache[$siteID.ToString()] -and ($global:towerCache[$siteID.ToString()].RetrievalDate -gt $refreshCalculatedOlderThan)) {
     if ($global:towerCache[$siteID.ToString()].towerMover -or -not $refreshCalculated) {
       $GLOBAL:requestsSaved += 1
       return $global:towerCache[$siteID.ToString()]
@@ -369,10 +392,6 @@ function Get-Tower($mcc, $mnc, $siteID, $points, [switch]$refreshCalculated) {
 
 
   $results = Request "https://api.cellmapper.net/v6/getSite?MCC=$mcc&MNC=$mnc&Site=$siteID&RAT=LTE"
-  if ($results.Content -is [byte[]]) {
-    $results = Request -reset "https://api.cellmapper.net/v6/getSite?MCC=$mcc&MNC=$mnc&Site=$siteID&RAT=LTE"
-
-  }
   
   $results = $results.Content | ConvertFrom-Json
 
