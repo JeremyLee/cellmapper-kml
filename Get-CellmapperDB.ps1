@@ -36,10 +36,10 @@ if ((get-command sqlite3).CommandType -ne 'Application') {
   exit
 }
 else {
-  $output = sqlite3 cellmapperdata.db "pragma integrity_check" 2>&1
+  $output = sqlite3 $path "pragma integrity_check" 2>&1
   if ($output | where-object { $_ -is [System.Management.Automation.ErrorRecord] }) {
-    sqlite3 cellmapperdata.db ".recover" | sqlite3 recovered.db
-    Move-Item Recovered.db cellmapperdata.db -Force
+    sqlite3 $path ".recover" | sqlite3 recovered.db
+    Move-Item Recovered.db $path -Force
   }
 
 }
