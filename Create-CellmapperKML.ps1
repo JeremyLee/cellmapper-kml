@@ -12,7 +12,8 @@ param (
   [switch]$refreshCalculated,
   [nullable[datetime]]$refreshOlderThan = $null,
   [nullable[datetime]]$refreshCalculatedOlderThan = $null,
-  [array]$filterMCCMNC = $null
+  [array]$filterMCCMNC = $null,
+  [int]$minPoints = -1
 )
 
 #.\Get-CellmapperDB.ps1
@@ -174,6 +175,9 @@ try {
 
   foreach ($provider in $providerGroups) {
     $eNBs = $provider.Group | Group-Object -Property eNB | Sort-Object { [int]$_.Name }
+    if ($minPoints -ne -1) {
+      $eNBs = $eNBs | Where-Object { ($_.Group | where-object { $_.TimingAdvance -ne -1 }).Count -ge $minPoints }
+    }
 
     $providerSmallCellRanges = $smallCellRanges[$provider.Name]
 
