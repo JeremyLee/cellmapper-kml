@@ -286,7 +286,7 @@ function Request($url) {
     if ($reset) {
       $tempProgress = $ProgressPreference
       $ProgressPreference = 'SilentlyContinue'
-      $result = Invoke-WebRequest -uri $url -SessionVariable 'tempsession' -UserAgent $useragent
+      $result = Invoke-WebRequest -uri $url -SessionVariable 'tempsession' -UserAgent $useragent -UseBasicParsing
       $ProgressPreference = $tempProgress
       $global:session = $tempsession
       if ($reset) {
@@ -299,7 +299,7 @@ function Request($url) {
       if($null -eq $url){
         [System.Diagnostics.Debugger]::Break()
       }
-      $result = Invoke-WebRequest -uri $url -WebSession $global:session -UserAgent $useragent
+      $result = Invoke-WebRequest -uri $url -WebSession $global:session -UserAgent $useragent -UseBasicParsing
       $ProgressPreference = $tempProgress
     }
     if ($result.Content -isnot [byte[]]) {
