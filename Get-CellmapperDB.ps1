@@ -2,7 +2,7 @@
 param (
   [Parameter()]
   [string]
-  $Path = 'cellmapperdata.db'
+  $Path
 )
 
 $tempDir = Join-Path $env:TEMP ([System.IO.Path]::GetRandomFileName())
@@ -10,8 +10,18 @@ $tempFile = Join-Path $tempDir cellmapper.ab
 $temptar = Join-Path $tempDir 'cellmapper.tar.gz'
 mkdir -force $tempDir
 
+Write-Host "Please connect your device and allow USB debugging."
 adb wait-for-device
 
+if (-not $path) {
+  $deviceName = & adb shell settings get global device_name
+  $Path = $deviceName + '.db'
+}
+else {
+  $Path = 'cellmapperdata.db'
+}
+
+Write-Host "Please approve the backup."
 adb backup -f "$tempFile" -noapk cellmapper.net.cellmapper
 
 $infile = [System.IO.File]::OpenRead($tempFile)
